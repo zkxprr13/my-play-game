@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Мой первый полет</title>
+    <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
+
+    <script>
+      // Компонент для движения вперед по нажатию Space
+      AFRAME.registerComponent('space-move', {
+        schema: {
+          speed: { type: 'number', default: 0.1 }
+        },
+        init: function () {
+          this.isMoving = false;
+          this.direction = new THREE.Vector3();
+          window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') this.isMoving = true;
+          });
+          window.addEventListener('keyup', (e) => {
+            if (e.code === 'Space') this.isMoving = false;
+          });
+        },
+        tick: function () {
+          if (!this.isMoving) return;
+          const el = this.el;
+          el.object3D.getWorldDirection(this.direction);
+          el.object3D.position.addScaledVector(this.direction, -this.data.speed);
+        }
+      });
+
+      // Компонент для открытия ссылок
+      AFRAME.registerComponent('url-on-click', {
+        schema: { url: { type: 'string' } },
+        init: function () {
+          this.el.addEventListener('click', () => {
+            if (this.data.url) {
+              window.open(this.data.url, '_blank');
+            }
+          });
+        }
+      });
+    </script>
+  </head>
+  <body>
+    <a-scene>
+      <a-entity camera look-controls id="plane" position="0 1.6 0" space-move="speed: 0.2">
+        <a-entity cursor="fuse: false; rayOrigin: mouse;"
+                  raycaster="objects: .clickable">
+        </a-entity>
+        <a-box color="red" scale="0.2 0.1 0.5" position="0 -0.5 -1"></a-box>
+      </a-entity>
+
+      <a-sky color="#87CEEB"></a-sky>
+      <a-plane position="0 0 0" rotation="-90 0 0" width="100" height="100" color="#7BC8A4"></a-plane>
+
+      <a-box class="clickable" 
+             position="0 1 -5" 
+             color="orange" 
+             url-on-click="url: https://google.com">
+      </a-box>
+      
+    </a-scene>
+  </body>
+</html>
