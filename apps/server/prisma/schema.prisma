@@ -1,0 +1,29 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Level {
+  id        String   @id @default(cuid())
+  name      String   @db.VarChar(120)
+  items     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("levels")
+}
+
+model Upload {
+  id        String   @id @default(cuid())
+  filename  String   @db.VarChar(255)
+  mimeType  String   @db.VarChar(255)
+  sizeBytes Int
+  url       String   @db.VarChar(2048)
+  createdAt DateTime @default(now())
+
+  @@map("uploads")
+}
