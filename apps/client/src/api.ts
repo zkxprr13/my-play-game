@@ -1,19 +1,25 @@
 import {
   levelSchema,
+  levelsListResponseSchema,
   updateLevelRequestSchema,
   uploadResponseSchema,
   type Level,
   type UpdateLevelRequest
 } from '@my-play-game/shared';
 
-type LevelsListResponse = {
-  items: unknown[];
-  total: number;
-};
-
 const jsonHeaders = {
   'Content-Type': 'application/json'
 };
+
+const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? '').trim().replace(/\/$/, '');
+
+function toApiUrl(path: string): string {
+  if (apiBaseUrl.length === 0) {
+    return path;
+  }
+
+  return `${apiBaseUrl}${path}`;
+}
 
 function authHeader(adminToken: string): Record<string, string> {
   const token = adminToken.trim();
@@ -28,32 +34,26 @@ function authHeader(adminToken: string): Record<string, string> {
 }
 
 export async function getLatestLevel(): Promise<Level | null> {
-  const response = await fetch('/api/levels?limit=1&offset=0');
+  const response = await fetch(toApiUrl('/api/levels?limit=1&offset=0'));
 
   if (!response.ok) {
     return null;
   }
 
-  const payload = (await response.json()) as LevelsListResponse;
-  const [firstLevel] = payload.items;
+  const payload: unknown = await response.json();
+  const parsedList = levelsListResponseSchema.safeParse(payload);
 
-  if (firstLevel === undefined) {
+  if (!parsedList.success) {
     return null;
   }
 
-  const parsed = levelSchema.safeParse(firstLevel);
-
-  if (!parsed.success) {
-    return null;
-  }
-
-  return parsed.data;
+  return parsedList.data.items[0] ?? null;
 }
 
 export async function updateLevel(levelId: string, data: UpdateLevelRequest, adminToken: string): Promise<Level> {
   const parsedRequest = updateLevelRequestSchema.parse(data);
 
-  const response = await fetch(`/api/levels/${encodeURIComponent(levelId)}`, {
+  const response = await fetch(toApiUrl(`/api/levels/${encodeURIComponent(levelId)}`), {
     method: 'PUT',
     headers: {
       ...jsonHeaders,
@@ -66,7 +66,7 @@ export async function updateLevel(levelId: string, data: UpdateLevelRequest, adm
     throw new Error('Не удалось сохранить уровень');
   }
 
-  const payload = await response.json();
+  const payload: unknown = await response.json();
   return levelSchema.parse(payload);
 }
 
@@ -74,7 +74,7 @@ export async function uploadImage(file: File, adminToken: string): Promise<strin
   const formData = new FormData();
   formData.append('file', file);
 
-  const response = await fetch('/api/uploads/image', {
+  const response = await fetch(toApiUrl('/api/uploads'), {
     method: 'POST',
     headers: {
       ...authHeader(adminToken)
@@ -86,7 +86,7 @@ export async function uploadImage(file: File, adminToken: string): Promise<strin
     throw new Error('Не удалось загрузить изображение');
   }
 
-  const payload = await response.json();
+  const payload: unknown = await response.json();
   const parsed = uploadResponseSchema.safeParse(payload);
 
   if (!parsed.success) {

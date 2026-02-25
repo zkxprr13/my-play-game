@@ -1,3 +1,4 @@
+import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
@@ -36,14 +37,22 @@ app.setErrorHandler((error, _request, reply) => {
   reply.status(statusCode).send(payload);
 });
 
-const registerPlugins = async (): Promise<void> => {
-  const corsOrigin = process.env.CORS_ORIGIN;
+const readRequiredUrl = (key: 'CORS_ORIGIN' | 'PUBLIC_BASE_URL'): string => {
+  const value = process.env[key];
 
-  if (!corsOrigin) {
-    throw new Error('CORS_ORIGIN is not configured');
+  if (!value) {
+    throw new Error(`${key} is not configured`);
   }
 
+  return new URL(value).toString().replace(/\/$/, '');
+};
+
+const registerPlugins = async (): Promise<void> => {
+  const corsOrigin = readRequiredUrl('CORS_ORIGIN');
+  readRequiredUrl('PUBLIC_BASE_URL');
+
   const uploadDir = process.env.UPLOAD_DIR ?? path.resolve(process.cwd(), 'uploads');
+  await mkdir(uploadDir, { recursive: true });
 
   await app.register(cors, {
     origin: corsOrigin

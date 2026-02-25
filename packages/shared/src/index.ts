@@ -70,6 +70,11 @@ export interface Level {
   updatedAt: string;
 }
 
+export interface LevelsListResponse {
+  items: Level[];
+  total: number;
+}
+
 export interface CreateLevelRequest {
   name: string;
   items: BillboardItem[];
@@ -144,6 +149,11 @@ export const levelSchema = z.object({
   updatedAt: z.string().datetime()
 });
 
+export const levelsListResponseSchema = z.object({
+  items: z.array(levelSchema),
+  total: z.number().int().nonnegative()
+});
+
 export const createLevelRequestSchema = z.object({
   name: z.string().min(1).max(120),
   items: z.array(billboardItemSchema)
@@ -167,6 +177,7 @@ export type Euler3DTO = z.infer<typeof euler3Schema>;
 export type Size2DTO = z.infer<typeof size2Schema>;
 export type BillboardItemDTO = z.infer<typeof billboardItemSchema>;
 export type LevelDTO = z.infer<typeof levelSchema>;
+export type LevelsListResponseDTO = z.infer<typeof levelsListResponseSchema>;
 export type CreateLevelRequestDTO = z.infer<typeof createLevelRequestSchema>;
 export type UpdateLevelRequestDTO = z.infer<typeof updateLevelRequestSchema>;
 export type UploadResponseDTO = z.infer<typeof uploadResponseSchema>;

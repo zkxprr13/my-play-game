@@ -7,12 +7,13 @@ import {
   billboardItemSchema,
   createLevelRequestSchema,
   levelSchema,
+  levelsListResponseSchema,
   updateLevelRequestSchema,
   uploadResponseSchema,
   type BillboardItem,
   type Level
 } from '@my-play-game/shared';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../db/prisma.js';
 import { createHttpError } from '../lib/httpError.js';
@@ -72,6 +73,40 @@ function extensionFromMimeType(mimeType: string): string {
   return '.gif';
 }
 
+function uploadPublicUrl(fileName: string): string {
+  const publicBaseUrl = process.env.PUBLIC_BASE_URL;
+
+  if (!publicBaseUrl) {
+    throw createHttpError(500, 'PUBLIC_BASE_URL_NOT_CONFIGURED', 'Internal Server Error');
+  }
+
+  return new URL(`/uploads/${fileName}`, publicBaseUrl).toString();
+}
+
+async function handleImageUpload(request: FastifyRequest) {
+  const uploadDir = process.env.UPLOAD_DIR ?? path.resolve(process.cwd(), 'uploads');
+  await mkdir(uploadDir, { recursive: true });
+
+  const file = await request.file();
+
+  if (!file) {
+    throw createHttpError(400, 'VALIDATION_ERROR', 'File is required');
+  }
+
+  if (!allowedMimeTypes.has(file.mimetype)) {
+    throw createHttpError(400, 'VALIDATION_ERROR', 'Unsupported file type');
+  }
+
+  const fileName = `${Date.now()}-${randomUUID()}${extensionFromMimeType(file.mimetype)}`;
+  const absolutePath = path.join(uploadDir, fileName);
+
+  await pipeline(file.file, createWriteStream(absolutePath));
+
+  return uploadResponseSchema.parse({
+    url: uploadPublicUrl(fileName)
+  });
+}
+
 export const registerLevelsRoutes = async (app: FastifyInstance): Promise<void> => {
   app.get('/api/levels', async (request) => {
     const queryResult = paginationQuerySchema.safeParse(request.query);
@@ -94,10 +129,10 @@ export const registerLevelsRoutes = async (app: FastifyInstance): Promise<void> 
         prisma.level.count()
       ]);
 
-      return {
+      return levelsListResponseSchema.parse({
         items: levels.map(toLevel),
         total
-      };
+      });
     } catch (error) {
       throw mapPrismaError(error);
     }
@@ -178,27 +213,11 @@ export const registerLevelsRoutes = async (app: FastifyInstance): Promise<void> 
     }
   });
 
+  app.post('/api/uploads', { preHandler: requireAdmin }, async (request) => {
+    return handleImageUpload(request);
+  });
+
   app.post('/api/uploads/image', { preHandler: requireAdmin }, async (request) => {
-    const uploadDir = process.env.UPLOAD_DIR ?? path.resolve(process.cwd(), 'uploads');
-    await mkdir(uploadDir, { recursive: true });
-
-    const file = await request.file();
-
-    if (!file) {
-      throw createHttpError(400, 'VALIDATION_ERROR', 'File is required');
-    }
-
-    if (!allowedMimeTypes.has(file.mimetype)) {
-      throw createHttpError(400, 'VALIDATION_ERROR', 'Unsupported file type');
-    }
-
-    const fileName = `${Date.now()}-${randomUUID()}${extensionFromMimeType(file.mimetype)}`;
-    const absolutePath = path.join(uploadDir, fileName);
-
-    await pipeline(file.file, createWriteStream(absolutePath));
-
-    return uploadResponseSchema.parse({
-      url: `/uploads/${fileName}`
-    });
+    return handleImageUpload(request);
   });
 };
