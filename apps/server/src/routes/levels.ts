@@ -1,0 +1,156 @@
+import {
+  billboardItemSchema,
+  createLevelRequestSchema,
+  levelSchema,
+  updateLevelRequestSchema,
+  type BillboardItem,
+  type Level
+} from '@my-play-game/shared';
+import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
+import { prisma } from '../db/prisma.js';
+import { createHttpError } from '../lib/httpError.js';
+import { mapPrismaError } from '../lib/prismaError.js';
+import { requireAdmin } from '../middleware/requireAdmin.js';
+
+const paginationQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  offset: z.coerce.number().int().min(0).default(0)
+});
+
+const itemsSchema = z.array(billboardItemSchema);
+
+const parseItems = (value: unknown): BillboardItem[] => {
+  const parsed = itemsSchema.safeParse(value);
+
+  if (!parsed.success) {
+    throw createHttpError(500, 'INVALID_LEVEL_ITEMS', 'Stored level items are invalid');
+  }
+
+  return parsed.data;
+};
+
+const toLevel = (level: {
+  id: string;
+  name: string;
+  items: unknown;
+  createdAt: Date;
+  updatedAt: Date;
+}): Level => {
+  const payload = {
+    id: level.id,
+    name: level.name,
+    items: parseItems(level.items),
+    createdAt: level.createdAt.toISOString(),
+    updatedAt: level.updatedAt.toISOString()
+  };
+
+  return levelSchema.parse(payload);
+};
+
+export const registerLevelsRoutes = async (app: FastifyInstance): Promise<void> => {
+  app.get('/api/levels', async (request) => {
+    const queryResult = paginationQuerySchema.safeParse(request.query);
+
+    if (!queryResult.success) {
+      throw createHttpError(400, 'VALIDATION_ERROR', 'Invalid query parameters');
+    }
+
+    const { limit, offset } = queryResult.data;
+
+    try {
+      const [levels, total] = await Promise.all([
+        prisma.level.findMany({
+          orderBy: {
+            createdAt: 'desc'
+          },
+          take: limit,
+          skip: offset
+        }),
+        prisma.level.count()
+      ]);
+
+      return {
+        items: levels.map(toLevel),
+        total
+      };
+    } catch (error) {
+      throw mapPrismaError(error);
+    }
+  });
+
+  app.get('/api/levels/:id', async (request) => {
+    const paramsResult = z.object({ id: z.string().min(1) }).safeParse(request.params);
+
+    if (!paramsResult.success) {
+      throw createHttpError(400, 'VALIDATION_ERROR', 'Invalid level id');
+    }
+
+    const { id } = paramsResult.data;
+
+    try {
+      const level = await prisma.level.findUnique({
+        where: { id }
+      });
+
+      if (!level) {
+        throw createHttpError(404, 'NOT_FOUND', 'Level not found');
+      }
+
+      return toLevel(level);
+    } catch (error) {
+      throw mapPrismaError(error);
+    }
+  });
+
+  app.post('/api/levels', { preHandler: requireAdmin }, async (request, reply) => {
+    const bodyResult = createLevelRequestSchema.safeParse(request.body);
+
+    if (!bodyResult.success) {
+      throw createHttpError(400, 'VALIDATION_ERROR', 'Invalid request body');
+    }
+
+    const { name, items } = bodyResult.data;
+
+    try {
+      const level = await prisma.level.create({
+        data: {
+          name,
+          items
+        }
+      });
+
+      reply.status(201);
+      return toLevel(level);
+    } catch (error) {
+      throw mapPrismaError(error);
+    }
+  });
+
+  app.put('/api/levels/:id', { preHandler: requireAdmin }, async (request) => {
+    const paramsResult = z.object({ id: z.string().min(1) }).safeParse(request.params);
+
+    if (!paramsResult.success) {
+      throw createHttpError(400, 'VALIDATION_ERROR', 'Invalid level id');
+    }
+
+    const bodyResult = updateLevelRequestSchema.safeParse(request.body);
+
+    if (!bodyResult.success) {
+      throw createHttpError(400, 'VALIDATION_ERROR', 'Invalid request body');
+    }
+
+    const { id } = paramsResult.data;
+
+    try {
+      const level = await prisma.level.update({
+        where: { id },
+        data: bodyResult.data
+      });
+
+      return toLevel(level);
+    } catch (error) {
+      throw mapPrismaError(error);
+    }
+  });
+};

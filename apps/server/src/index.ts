@@ -6,6 +6,7 @@ import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import { HEALTH_RESPONSE, type ErrorResponse } from '@my-play-game/shared';
+import { registerLevelsRoutes } from './routes/levels.js';
 
 const app = Fastify({
   logger: true
@@ -68,6 +69,7 @@ app.get('/api/health', async () => HEALTH_RESPONSE);
 const start = async (): Promise<void> => {
   try {
     await registerPlugins();
+    await registerLevelsRoutes(app);
 
     await app.listen({
       port: 3000,
