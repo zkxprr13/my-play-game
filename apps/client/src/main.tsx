@@ -2,6 +2,7 @@ import { levelSchema, type BillboardItem } from '@my-play-game/shared';
 import React, { useEffect, useRef, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import * as THREE from 'three';
+import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import './styles.css';
 import { AssetCache } from './scene/AssetCache';
 import { BillboardFactory } from './scene/BillboardFactory';
@@ -17,6 +18,8 @@ type HudState = {
   speed: number;
   altitude: number;
 };
+
+type TransformMode = 'translate' | 'rotate';
 
 type ControlKey = keyof InputState;
 
@@ -63,6 +66,9 @@ function GameApp(): JSX.Element {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const interactiveMeshesRef = useRef<Map<string, THREE.Mesh>>(new Map());
   const [hud, setHud] = useState<HudState>({ speed: 0, altitude: 0 });
+  const [editorMode, setEditorMode] = useState(false);
+  const [transformMode, setTransformMode] = useState<TransformMode>('translate');
+  const [selectedPanelId, setSelectedPanelId] = useState<string | null>(null);
 
   useEffect(() => {
     const mountElement = mountRef.current;
@@ -80,6 +86,8 @@ function GameApp(): JSX.Element {
     scene.background = new THREE.Color(0x87ceeb);
 
     const camera = new THREE.PerspectiveCamera(60, mountElement.clientWidth / mountElement.clientHeight, 0.1, 1000);
+    const raycaster = new THREE.Raycaster();
+    const pointerNdc = new THREE.Vector2();
 
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.35);
     scene.add(ambientLight);
@@ -141,6 +149,12 @@ function GameApp(): JSX.Element {
     billboardsGroup.name = 'level-billboards';
     scene.add(billboardsGroup);
 
+    const transformControls = new TransformControls(camera, renderer.domElement);
+    transformControls.enabled = false;
+    transformControls.setSpace('world');
+    transformControls.setSize(0.7);
+    scene.add(transformControls.getHelper());
+
     const assetCache = new AssetCache();
     const billboardFactory = new BillboardFactory(assetCache);
 
@@ -179,6 +193,8 @@ function GameApp(): JSX.Element {
     }).catch(() => undefined);
 
     const inputState: InputState = { KeyW: false, KeyS: false, KeyA: false, KeyD: false };
+    let activeEditorMode = false;
+    let activeTransformMode: TransformMode = 'translate';
 
     let speed = 0;
     let targetSpeed = 0;
@@ -191,12 +207,48 @@ function GameApp(): JSX.Element {
     let prevMouseY = 0;
 
     const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.code === 'F1') {
+        event.preventDefault();
+        activeEditorMode = !activeEditorMode;
+        transformControls.enabled = activeEditorMode;
+
+        if (!activeEditorMode) {
+          transformControls.detach();
+          setSelectedPanelId(null);
+        }
+
+        setEditorMode(activeEditorMode);
+        return;
+      }
+
+      if (activeEditorMode && event.code === 'KeyG') {
+        activeTransformMode = 'translate';
+        transformControls.setMode('translate');
+        setTransformMode('translate');
+        return;
+      }
+
+      if (activeEditorMode && event.code === 'KeyR') {
+        activeTransformMode = 'rotate';
+        transformControls.setMode('rotate');
+        setTransformMode('rotate');
+        return;
+      }
+
+      if (activeEditorMode) {
+        return;
+      }
+
       if (isControlKey(event.code)) {
         inputState[event.code] = true;
       }
     };
 
     const onKeyUp = (event: KeyboardEvent): void => {
+      if (activeEditorMode) {
+        return;
+      }
+
       if (isControlKey(event.code)) {
         inputState[event.code] = false;
       }
@@ -206,6 +258,31 @@ function GameApp(): JSX.Element {
       if (event.button !== 0) {
         return;
       }
+
+      if (activeEditorMode) {
+        const rect = renderer.domElement.getBoundingClientRect();
+        pointerNdc.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+        pointerNdc.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+        raycaster.setFromCamera(pointerNdc, camera);
+
+        const intersections = raycaster.intersectObjects(billboardsGroup.children, true);
+        const selectedObject = intersections[0]?.object ?? null;
+
+        if (selectedObject === null) {
+          transformControls.detach();
+          setSelectedPanelId(null);
+          return;
+        }
+
+        transformControls.attach(selectedObject);
+        transformControls.enabled = true;
+        transformControls.setMode(activeTransformMode);
+
+        const itemId = selectedObject.userData.itemId;
+        setSelectedPanelId(typeof itemId === 'string' ? itemId : selectedObject.uuid);
+        return;
+      }
+
       isDragging = true;
       prevMouseX = event.clientX;
       prevMouseY = event.clientY;
@@ -264,22 +341,24 @@ function GameApp(): JSX.Element {
       const yawSpeed = 1.35;
       const maxSpeed = 85;
 
-      if (inputState.KeyW) {
-        targetSpeed += speedChange * deltaTime;
+      if (!activeEditorMode) {
+        if (inputState.KeyW) {
+          targetSpeed += speedChange * deltaTime;
+        }
+        if (inputState.KeyS) {
+          targetSpeed -= speedChange * deltaTime;
+        }
+        targetSpeed = clamp(targetSpeed, 0, maxSpeed);
+
+        const yawInput = Number(inputState.KeyD) - Number(inputState.KeyA);
+        yaw += yawInput * yawSpeed * deltaTime;
+
+        speed += (targetSpeed - speed) * Math.min(1, deltaTime * 2.4);
+
+        forward.set(Math.sin(yaw), 0, Math.cos(yaw));
+        airplane.position.addScaledVector(forward, speed * deltaTime);
+        airplane.rotation.y = yaw;
       }
-      if (inputState.KeyS) {
-        targetSpeed -= speedChange * deltaTime;
-      }
-      targetSpeed = clamp(targetSpeed, 0, maxSpeed);
-
-      const yawInput = Number(inputState.KeyD) - Number(inputState.KeyA);
-      yaw += yawInput * yawSpeed * deltaTime;
-
-      speed += (targetSpeed - speed) * Math.min(1, deltaTime * 2.4);
-
-      forward.set(Math.sin(yaw), 0, Math.cos(yaw));
-      airplane.position.addScaledVector(forward, speed * deltaTime);
-      airplane.rotation.y = yaw;
 
       const orbitYaw = yaw + cameraYaw;
       cameraOffset.set(0, 2.8, CAMERA_DISTANCE).applyEuler(new THREE.Euler(cameraPitch, orbitYaw, 0, 'YXZ'));
@@ -307,6 +386,7 @@ function GameApp(): JSX.Element {
       renderer.domElement.removeEventListener('pointermove', onPointerMove);
       renderer.domElement.removeEventListener('pointerup', onPointerUp);
       renderer.domElement.removeEventListener('pointerleave', onPointerUp);
+      transformControls.dispose();
 
       interactiveMeshesRef.current.clear();
 
@@ -332,7 +412,7 @@ function GameApp(): JSX.Element {
   }, []);
 
   return (
-    <main className="game-root">
+    <main className={`game-root ${editorMode ? 'editor-mode' : ''}`}>
       <div className="game-canvas" ref={mountRef} />
 
       <div className="crosshair" aria-hidden="true">
@@ -343,7 +423,10 @@ function GameApp(): JSX.Element {
       <section className="hud" aria-label="Flight information">
         <p>Speed: {hud.speed.toFixed(1)} m/s</p>
         <p>Altitude: {hud.altitude.toFixed(1)} m</p>
-        <p className="hint">W/S - target speed | A/D - yaw | Mouse drag - camera orbit</p>
+        <p>Editor: {editorMode ? 'ON' : 'OFF'} (F1)</p>
+        <p>Transform: {transformMode === 'translate' ? 'Move (G)' : 'Rotate (R)'}</p>
+        <p>Selected panel: {selectedPanelId ?? 'none'}</p>
+        <p className="hint">Flight: W/S - speed, A/D - yaw | Camera: mouse drag | Editor: click panel</p>
       </section>
     </main>
   );
