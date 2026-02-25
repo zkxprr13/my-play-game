@@ -111,9 +111,13 @@ export const billboardItemBaseSchema = z.object({
   title: z.string().max(120).optional()
 });
 
+const uploadPathSchema = z.string().regex(/^\/uploads\/.+/, 'Expected /uploads path').max(2048);
+
+const imageUrlSchema = z.union([z.string().url().max(2048), uploadPathSchema]);
+
 export const billboardImageItemSchema = billboardItemBaseSchema.extend({
   type: z.literal('image'),
-  url: z.string().url().max(2048)
+  url: imageUrlSchema
 });
 
 export const billboardLinkItemSchema = billboardItemBaseSchema.extend({
