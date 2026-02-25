@@ -92,3 +92,72 @@ body,
   opacity: 0.85;
   font-size: 0.78rem;
 }
+
+.editor-panel {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.9rem;
+  border-radius: 0.6rem;
+  background: rgba(10, 17, 27, 0.82);
+  border: 1px solid rgba(190, 220, 255, 0.2);
+  backdrop-filter: blur(6px);
+}
+
+.editor-panel h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.editor-panel label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.82rem;
+}
+
+.editor-panel input,
+.editor-panel select,
+.editor-panel textarea,
+.editor-panel button {
+  width: 100%;
+  padding: 0.46rem 0.55rem;
+  border-radius: 0.4rem;
+  border: 1px solid rgba(190, 220, 255, 0.35);
+  background: rgba(255, 255, 255, 0.06);
+  color: #e8f1ff;
+}
+
+.editor-panel textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.size-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.save-button {
+  cursor: pointer;
+  font-weight: 600;
+  background: rgba(48, 104, 204, 0.7);
+}
+
+.save-state {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.save-state.success {
+  color: #7ef7a0;
+}
+
+.save-state.error {
+  color: #ff8f8f;
+}

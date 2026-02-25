@@ -1,8 +1,14 @@
+import { createWriteStream } from 'node:fs';
+import { mkdir } from 'node:fs/promises';
+import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
+import { randomUUID } from 'node:crypto';
 import {
   billboardItemSchema,
   createLevelRequestSchema,
   levelSchema,
   updateLevelRequestSchema,
+  uploadResponseSchema,
   type BillboardItem,
   type Level
 } from '@my-play-game/shared';
@@ -47,6 +53,24 @@ const toLevel = (level: {
 
   return levelSchema.parse(payload);
 };
+
+const allowedMimeTypes = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+
+function extensionFromMimeType(mimeType: string): string {
+  if (mimeType === 'image/png') {
+    return '.png';
+  }
+
+  if (mimeType === 'image/jpeg') {
+    return '.jpg';
+  }
+
+  if (mimeType === 'image/webp') {
+    return '.webp';
+  }
+
+  return '.gif';
+}
 
 export const registerLevelsRoutes = async (app: FastifyInstance): Promise<void> => {
   app.get('/api/levels', async (request) => {
@@ -152,5 +176,29 @@ export const registerLevelsRoutes = async (app: FastifyInstance): Promise<void> 
     } catch (error) {
       throw mapPrismaError(error);
     }
+  });
+
+  app.post('/api/uploads/image', { preHandler: requireAdmin }, async (request) => {
+    const uploadDir = process.env.UPLOAD_DIR ?? path.resolve(process.cwd(), 'uploads');
+    await mkdir(uploadDir, { recursive: true });
+
+    const file = await request.file();
+
+    if (!file) {
+      throw createHttpError(400, 'VALIDATION_ERROR', 'File is required');
+    }
+
+    if (!allowedMimeTypes.has(file.mimetype)) {
+      throw createHttpError(400, 'VALIDATION_ERROR', 'Unsupported file type');
+    }
+
+    const fileName = `${Date.now()}-${randomUUID()}${extensionFromMimeType(file.mimetype)}`;
+    const absolutePath = path.join(uploadDir, fileName);
+
+    await pipeline(file.file, createWriteStream(absolutePath));
+
+    return uploadResponseSchema.parse({
+      url: `/uploads/${fileName}`
+    });
   });
 };

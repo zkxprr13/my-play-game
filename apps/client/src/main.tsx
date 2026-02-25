@@ -1,9 +1,10 @@
-import { levelSchema, type BillboardItem } from '@my-play-game/shared';
-import React, { useEffect, useRef, useState } from 'react';
+import { billboardItemSchema, type BillboardItem } from '@my-play-game/shared';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import * as THREE from 'three';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import './styles.css';
+import { getLatestLevel, updateLevel, uploadImage } from './api';
 import { AssetCache } from './scene/AssetCache';
 import { BillboardFactory } from './scene/BillboardFactory';
 
@@ -23,9 +24,9 @@ type TransformMode = 'translate' | 'rotate';
 
 type ControlKey = keyof InputState;
 
-type LevelsListResponse = {
-  items: unknown[];
-  total: number;
+type SaveState = {
+  kind: 'idle' | 'success' | 'error';
+  message: string;
 };
 
 function isControlKey(code: string): code is ControlKey {
@@ -35,31 +36,26 @@ function isControlKey(code: string): code is ControlKey {
 const CAMERA_DISTANCE = 12;
 const CAMERA_PITCH_MIN = -0.6;
 const CAMERA_PITCH_MAX = 0.4;
+const ADMIN_TOKEN_STORAGE_KEY = 'my-play-game-admin-token';
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-async function fetchLevelItems(): Promise<BillboardItem[]> {
-  const response = await fetch('/api/levels?limit=1&offset=0');
+function updateItemById(items: BillboardItem[], itemId: string, updater: (item: BillboardItem) => BillboardItem): BillboardItem[] {
+  return items.map((item) => (item.id === itemId ? updater(item) : item));
+}
 
-  if (!response.ok) {
-    return [];
+function toEditableText(item: BillboardItem): string {
+  return item.type === 'text' ? item.text : item.url;
+}
+
+function parseBillboardType(value: string): BillboardItem['type'] | null {
+  if (value === 'image' || value === 'link' || value === 'text') {
+    return value;
   }
 
-  const payload = (await response.json()) as LevelsListResponse;
-
-  if (payload.items.length === 0) {
-    return [];
-  }
-
-  const parsedLevel = levelSchema.safeParse(payload.items[0]);
-
-  if (!parsedLevel.success) {
-    return [];
-  }
-
-  return parsedLevel.data.items;
+  return null;
 }
 
 function GameApp(): JSX.Element {
@@ -69,6 +65,54 @@ function GameApp(): JSX.Element {
   const [editorMode, setEditorMode] = useState(false);
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
   const [selectedPanelId, setSelectedPanelId] = useState<string | null>(null);
+
+  const [levelId, setLevelId] = useState<string | null>(null);
+  const [currentName, setCurrentName] = useState('');
+  const [items, setItems] = useState<BillboardItem[]>([]);
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [adminToken, setAdminToken] = useState('');
+  const [saveState, setSaveState] = useState<SaveState>({ kind: 'idle', message: '' });
+  const [isSaving, setIsSaving] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+
+  useEffect(() => {
+    const storedToken = window.localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY);
+
+    if (typeof storedToken === 'string') {
+      setAdminToken(storedToken);
+    }
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, adminToken);
+  }, [adminToken]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void getLatestLevel().then((level) => {
+      if (cancelled || level === null) {
+        return;
+      }
+
+      setLevelId(level.id);
+      setCurrentName(level.name);
+      setItems(level.items);
+      setSelectedItemId(level.items[0]?.id ?? null);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const selectedItem = useMemo(() => {
+    if (selectedItemId === null) {
+      return null;
+    }
+
+    return items.find((item) => item.id === selectedItemId) ?? null;
+  }, [items, selectedItemId]);
 
   useEffect(() => {
     const mountElement = mountRef.current;
@@ -160,7 +204,7 @@ function GameApp(): JSX.Element {
 
     let isMounted = true;
 
-    void fetchLevelItems().then(async (items) => {
+    void (async () => {
       const meshes = await Promise.all(
         items.map(async (item) => {
           return billboardFactory.createMesh(item);
@@ -190,7 +234,7 @@ function GameApp(): JSX.Element {
           interactiveMeshesRef.current.set(itemId, mesh);
         }
       });
-    }).catch(() => undefined);
+    })().catch(() => undefined);
 
     const inputState: InputState = { KeyW: false, KeyS: false, KeyA: false, KeyD: false };
     let activeEditorMode = false;
@@ -409,7 +453,165 @@ function GameApp(): JSX.Element {
       mountElement.removeChild(renderer.domElement);
       renderer.dispose();
     };
-  }, []);
+  }, [items]);
+
+  const onSelectedItemChange = (nextId: string): void => {
+    setSelectedItemId(nextId);
+    setSaveState({ kind: 'idle', message: '' });
+  };
+
+  const onItemTypeChange = (nextType: BillboardItem['type']): void => {
+    if (selectedItemId === null) {
+      return;
+    }
+
+    setItems((prevItems) =>
+      updateItemById(prevItems, selectedItemId, (item) => {
+        if (nextType === item.type) {
+          return item;
+        }
+
+        if (nextType === 'text') {
+          return {
+            ...item,
+            type: 'text',
+            text: item.type === 'text' ? item.text : ''
+          };
+        }
+
+        return {
+          ...item,
+          type: nextType,
+          url: item.type === 'text' ? '' : item.url
+        };
+      })
+    );
+  };
+
+  const onItemTitleChange = (title: string): void => {
+    if (selectedItemId === null) {
+      return;
+    }
+
+    setItems((prevItems) =>
+      updateItemById(prevItems, selectedItemId, (item) => ({
+        ...item,
+        title: title.trim().length === 0 ? undefined : title
+      }))
+    );
+  };
+
+  const onItemContentChange = (value: string): void => {
+    if (selectedItemId === null) {
+      return;
+    }
+
+    setItems((prevItems) =>
+      updateItemById(prevItems, selectedItemId, (item) => {
+        if (item.type === 'text') {
+          return {
+            ...item,
+            text: value
+          };
+        }
+
+        return {
+          ...item,
+          url: value
+        };
+      })
+    );
+  };
+
+  const onItemSizeChange = (key: 'w' | 'h', value: string): void => {
+    if (selectedItemId === null) {
+      return;
+    }
+
+    const nextNumber = Number(value);
+
+    if (!Number.isFinite(nextNumber)) {
+      return;
+    }
+
+    setItems((prevItems) =>
+      updateItemById(prevItems, selectedItemId, (item) => ({
+        ...item,
+        size: {
+          ...item.size,
+          [key]: nextNumber
+        }
+      }))
+    );
+  };
+
+  const onUploadImage = async (event: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
+    const file = event.target.files?.[0];
+
+    if (!file || selectedItem === null || selectedItem.type !== 'image') {
+      return;
+    }
+
+    setIsUploading(true);
+    setSaveState({ kind: 'idle', message: '' });
+
+    try {
+      const uploadedUrl = await uploadImage(file, adminToken);
+
+      setItems((prevItems) =>
+        updateItemById(prevItems, selectedItem.id, (item) => {
+          if (item.type !== 'image') {
+            return item;
+          }
+
+          return {
+            ...item,
+            url: uploadedUrl
+          };
+        })
+      );
+
+      setSaveState({ kind: 'success', message: 'Изображение загружено' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Ошибка загрузки изображения';
+      setSaveState({ kind: 'error', message });
+    } finally {
+      event.target.value = '';
+      setIsUploading(false);
+    }
+  };
+
+  const onSaveLevel = async (): Promise<void> => {
+    if (levelId === null) {
+      setSaveState({ kind: 'error', message: 'Уровень не найден' });
+      return;
+    }
+
+    const parsedItems = items.map((item) => billboardItemSchema.parse(item));
+
+    setIsSaving(true);
+    setSaveState({ kind: 'idle', message: '' });
+
+    try {
+      const updatedLevel = await updateLevel(
+        levelId,
+        {
+          name: currentName,
+          items: parsedItems
+        },
+        adminToken
+      );
+
+      setCurrentName(updatedLevel.name);
+      setItems(updatedLevel.items);
+      setSaveState({ kind: 'success', message: 'Уровень сохранён' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Ошибка сохранения уровня';
+      setSaveState({ kind: 'error', message });
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   return (
     <main className={`game-root ${editorMode ? 'editor-mode' : ''}`}>
@@ -428,6 +630,119 @@ function GameApp(): JSX.Element {
         <p>Selected panel: {selectedPanelId ?? 'none'}</p>
         <p className="hint">Flight: W/S - speed, A/D - yaw | Camera: mouse drag | Editor: click panel</p>
       </section>
+
+      <aside className="editor-panel" aria-label="Level editor">
+        <h2>Редактор</h2>
+
+        <label>
+          Level name
+          <input value={currentName} onChange={(event) => setCurrentName(event.target.value)} placeholder="Level name" />
+        </label>
+
+        <label>
+          Admin token
+          <input
+            value={adminToken}
+            onChange={(event) => setAdminToken(event.target.value)}
+            placeholder="Bearer token"
+            type="password"
+          />
+        </label>
+
+        <label>
+          Item
+          <select
+            value={selectedItemId ?? ''}
+            onChange={(event) => onSelectedItemChange(event.target.value)}
+            disabled={items.length === 0}
+          >
+            {items.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.title ?? item.id}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label>
+          Type
+          <select
+            value={selectedItem?.type ?? 'text'}
+            onChange={(event) => {
+              const parsedType = parseBillboardType(event.target.value);
+              if (parsedType !== null) {
+                onItemTypeChange(parsedType);
+              }
+            }}
+            disabled={selectedItem === null}
+          >
+            <option value="image">image</option>
+            <option value="link">link</option>
+            <option value="text">text</option>
+          </select>
+        </label>
+
+        <label>
+          Title
+          <input
+            value={selectedItem?.title ?? ''}
+            onChange={(event) => onItemTitleChange(event.target.value)}
+            disabled={selectedItem === null}
+          />
+        </label>
+
+        <label>
+          {selectedItem?.type === 'text' ? 'Text' : 'URL'}
+          <textarea
+            value={selectedItem ? toEditableText(selectedItem) : ''}
+            onChange={(event) => onItemContentChange(event.target.value)}
+            disabled={selectedItem === null}
+          />
+        </label>
+
+        <div className="size-row">
+          <label>
+            W
+            <input
+              type="number"
+              min="0.1"
+              max="100"
+              step="0.1"
+              value={selectedItem?.size.w ?? ''}
+              onChange={(event) => onItemSizeChange('w', event.target.value)}
+              disabled={selectedItem === null}
+            />
+          </label>
+
+          <label>
+            H
+            <input
+              type="number"
+              min="0.1"
+              max="100"
+              step="0.1"
+              value={selectedItem?.size.h ?? ''}
+              onChange={(event) => onItemSizeChange('h', event.target.value)}
+              disabled={selectedItem === null}
+            />
+          </label>
+        </div>
+
+        {selectedItem?.type === 'image' ? (
+          <label>
+            Upload image
+            <input type="file" accept="image/*" onChange={onUploadImage} disabled={isUploading} />
+          </label>
+        ) : null}
+
+        <button className="save-button" onClick={() => void onSaveLevel()} disabled={isSaving || levelId === null}>
+          {isSaving ? 'Saving...' : 'Save level'}
+        </button>
+
+        {saveState.kind !== 'idle' ? (
+          <p className={`save-state ${saveState.kind === 'error' ? 'error' : 'success'}`}>{saveState.message}</p>
+        ) : null}
+      </aside>
     </main>
   );
 }
