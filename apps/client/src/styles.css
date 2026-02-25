@@ -33,6 +33,10 @@ body,
   cursor: grabbing;
 }
 
+.editor-mode .game-canvas {
+  cursor: default;
+}
+
 .crosshair {
   pointer-events: none;
   position: absolute;
@@ -41,6 +45,10 @@ body,
   transform: translate(-50%, -50%);
   width: 24px;
   height: 24px;
+}
+
+.editor-mode .crosshair {
+  display: none;
 }
 
 .crosshair-line {
