@@ -1,18 +1,7 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
-
-type HttpError = Error & {
-  statusCode: number;
-  code: string;
-};
+import { createHttpError } from '../lib/httpError.js';
 
 const BEARER_PREFIX = 'Bearer ';
-
-const createHttpError = (statusCode: number, code: string, message: string): HttpError => {
-  const error = new Error(message) as HttpError;
-  error.statusCode = statusCode;
-  error.code = code;
-  return error;
-};
 
 export const requireAdmin = async (
   request: FastifyRequest,
