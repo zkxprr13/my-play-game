@@ -1,7 +1,10 @@
+import { levelSchema, type BillboardItem } from '@my-play-game/shared';
 import React, { useEffect, useRef, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import * as THREE from 'three';
 import './styles.css';
+import { AssetCache } from './scene/AssetCache';
+import { BillboardFactory } from './scene/BillboardFactory';
 
 type InputState = {
   KeyW: boolean;
@@ -17,6 +20,11 @@ type HudState = {
 
 type ControlKey = keyof InputState;
 
+type LevelsListResponse = {
+  items: unknown[];
+  total: number;
+};
+
 function isControlKey(code: string): code is ControlKey {
   return code === 'KeyW' || code === 'KeyS' || code === 'KeyA' || code === 'KeyD';
 }
@@ -29,8 +37,31 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+async function fetchLevelItems(): Promise<BillboardItem[]> {
+  const response = await fetch('/api/levels?limit=1&offset=0');
+
+  if (!response.ok) {
+    return [];
+  }
+
+  const payload = (await response.json()) as LevelsListResponse;
+
+  if (payload.items.length === 0) {
+    return [];
+  }
+
+  const parsedLevel = levelSchema.safeParse(payload.items[0]);
+
+  if (!parsedLevel.success) {
+    return [];
+  }
+
+  return parsedLevel.data.items;
+}
+
 function GameApp(): JSX.Element {
   const mountRef = useRef<HTMLDivElement | null>(null);
+  const interactiveMeshesRef = useRef<Map<string, THREE.Mesh>>(new Map());
   const [hud, setHud] = useState<HudState>({ speed: 0, altitude: 0 });
 
   useEffect(() => {
@@ -105,6 +136,47 @@ function GameApp(): JSX.Element {
 
     airplane.position.set(0, 8, 0);
     scene.add(airplane);
+
+    const billboardsGroup = new THREE.Group();
+    billboardsGroup.name = 'level-billboards';
+    scene.add(billboardsGroup);
+
+    const assetCache = new AssetCache();
+    const billboardFactory = new BillboardFactory(assetCache);
+
+    let isMounted = true;
+
+    void fetchLevelItems().then(async (items) => {
+      const meshes = await Promise.all(
+        items.map(async (item) => {
+          return billboardFactory.createMesh(item);
+        })
+      );
+
+      if (!isMounted) {
+        meshes.forEach((mesh) => {
+          const material = mesh.material;
+          if (material instanceof THREE.Material) {
+            material.dispose();
+          }
+          mesh.geometry.dispose();
+        });
+        return;
+      }
+
+      interactiveMeshesRef.current.clear();
+
+      meshes.forEach((mesh) => {
+        billboardsGroup.add(mesh);
+
+        const itemId = mesh.userData.itemId;
+        const isInteractive = mesh.userData.interactive;
+
+        if (typeof itemId === 'string' && isInteractive === true) {
+          interactiveMeshesRef.current.set(itemId, mesh);
+        }
+      });
+    }).catch(() => undefined);
 
     const inputState: InputState = { KeyW: false, KeyS: false, KeyA: false, KeyD: false };
 
@@ -226,6 +298,7 @@ function GameApp(): JSX.Element {
     animate();
 
     return () => {
+      isMounted = false;
       window.cancelAnimationFrame(animationFrameId);
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
@@ -234,6 +307,24 @@ function GameApp(): JSX.Element {
       renderer.domElement.removeEventListener('pointermove', onPointerMove);
       renderer.domElement.removeEventListener('pointerup', onPointerUp);
       renderer.domElement.removeEventListener('pointerleave', onPointerUp);
+
+      interactiveMeshesRef.current.clear();
+
+      billboardsGroup.children.forEach((child) => {
+        if (!(child instanceof THREE.Mesh)) {
+          return;
+        }
+
+        child.geometry.dispose();
+        const material = child.material;
+
+        if (material instanceof THREE.Material) {
+          if ('map' in material && material.map) {
+            material.map.dispose();
+          }
+          material.dispose();
+        }
+      });
 
       mountElement.removeChild(renderer.domElement);
       renderer.dispose();
