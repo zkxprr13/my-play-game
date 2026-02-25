@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import * as THREE from 'three';
+import type { BillboardItem, BillboardLinkItem, BillboardTextItem, BillboardImageItem } from '@my-play-game/shared';
 import './styles.css';
 
 type InputState = {
@@ -15,6 +16,23 @@ type HudState = {
   altitude: number;
 };
 
+type ModalContent =
+  | { type: 'image'; title: string; url: string }
+  | { type: 'text'; title: string; text: string }
+  | null;
+
+type HoverState = {
+  title: string;
+  actionHint: string;
+};
+
+type InteractivePanel = {
+  item: BillboardItem;
+  mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshStandardMaterial>;
+  border: THREE.LineSegments<THREE.EdgesGeometry, THREE.LineBasicMaterial>;
+  baseEmissive: THREE.Color;
+};
+
 type ControlKey = keyof InputState;
 
 function isControlKey(code: string): code is ControlKey {
@@ -24,14 +42,80 @@ function isControlKey(code: string): code is ControlKey {
 const CAMERA_DISTANCE = 12;
 const CAMERA_PITCH_MIN = -0.6;
 const CAMERA_PITCH_MAX = 0.4;
+const RAYCAST_INTERVAL_MS = 45;
+
+const demoItems: BillboardItem[] = [
+  {
+    id: 'panel-link',
+    type: 'link',
+    title: 'Open Three.js docs',
+    url: 'https://threejs.org/docs/',
+    position: { x: -9, y: 4, z: 8 },
+    rotation: { x: 0, y: 0.45, z: 0 },
+    size: { w: 6, h: 3.5 }
+  },
+  {
+    id: 'panel-image',
+    type: 'image',
+    title: 'Sky sample image',
+    url: 'https://images.unsplash.com/photo-1472120435266-53107fd0c44a?auto=format&fit=crop&w=1400&q=80',
+    position: { x: 10, y: 5, z: 4 },
+    rotation: { x: 0, y: -0.6, z: 0 },
+    size: { w: 5.5, h: 3.4 }
+  },
+  {
+    id: 'panel-text',
+    type: 'text',
+    title: 'Flight note',
+    text: 'Pilot briefing:\n\n- Keep speed stable before turns\n- Use mouse drag to orbit camera\n- Press E or LeftClick on a panel to interact',
+    position: { x: 2, y: 4.2, z: -10 },
+    rotation: { x: 0, y: Math.PI, z: 0 },
+    size: { w: 6.4, h: 3.6 }
+  }
+];
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+function getPanelColor(item: BillboardItem): number {
+  if (item.type === 'link') {
+    return 0x2f76ff;
+  }
+  if (item.type === 'image') {
+    return 0x5a2fff;
+  }
+  return 0x2f9e5a;
+}
+
+function getActionHint(item: BillboardItem): string {
+  if (item.type === 'link') {
+    return 'E / LeftClick: open link';
+  }
+  return 'E / LeftClick: open modal';
+}
+
+function toModalContent(item: BillboardImageItem | BillboardTextItem): ModalContent {
+  if (item.type === 'image') {
+    return {
+      type: 'image',
+      title: item.title ?? 'Image panel',
+      url: item.url
+    };
+  }
+
+  return {
+    type: 'text',
+    title: item.title ?? 'Text panel',
+    text: item.text
+  };
+}
+
 function GameApp(): JSX.Element {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const [hud, setHud] = useState<HudState>({ speed: 0, altitude: 0 });
+  const [hover, setHover] = useState<HoverState | null>(null);
+  const [modalContent, setModalContent] = useState<ModalContent>(null);
 
   useEffect(() => {
     const mountElement = mountRef.current;
@@ -106,6 +190,37 @@ function GameApp(): JSX.Element {
     airplane.position.set(0, 8, 0);
     scene.add(airplane);
 
+    const panels: InteractivePanel[] = demoItems.map((item) => {
+      const material = new THREE.MeshStandardMaterial({
+        color: getPanelColor(item),
+        metalness: 0.1,
+        roughness: 0.5,
+        emissive: new THREE.Color(0x000000)
+      });
+
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(item.size.w, item.size.h), material);
+      mesh.position.set(item.position.x, item.position.y, item.position.z);
+      mesh.rotation.set(item.rotation.x, item.rotation.y, item.rotation.z);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      scene.add(mesh);
+
+      const border = new THREE.LineSegments(
+        new THREE.EdgesGeometry(mesh.geometry),
+        new THREE.LineBasicMaterial({ color: 0x99ccff, transparent: true, opacity: 0 })
+      );
+      border.position.copy(mesh.position);
+      border.rotation.copy(mesh.rotation);
+      scene.add(border);
+
+      return {
+        item,
+        mesh,
+        border,
+        baseEmissive: material.emissive.clone()
+      };
+    });
+
     const inputState: InputState = { KeyW: false, KeyS: false, KeyA: false, KeyD: false };
 
     let speed = 0;
@@ -115,12 +230,78 @@ function GameApp(): JSX.Element {
     let cameraPitch = -0.28;
 
     let isDragging = false;
+    let dragDistance = 0;
     let prevMouseX = 0;
     let prevMouseY = 0;
+
+    const raycaster = new THREE.Raycaster();
+    const screenCenter = new THREE.Vector2(0, 0);
+    let hoveredPanel: InteractivePanel | null = null;
+    let lastRaycastTime = 0;
+
+    const applyHoverVisual = (target: InteractivePanel | null): void => {
+      if (hoveredPanel !== null) {
+        hoveredPanel.mesh.material.emissive.copy(hoveredPanel.baseEmissive);
+        hoveredPanel.border.material.opacity = 0;
+      }
+
+      hoveredPanel = target;
+
+      if (hoveredPanel !== null) {
+        hoveredPanel.mesh.material.emissive.setRGB(0.22, 0.22, 0.22);
+        hoveredPanel.border.material.opacity = 1;
+        setHover({
+          title: hoveredPanel.item.title ?? `Panel ${hoveredPanel.item.type}`,
+          actionHint: getActionHint(hoveredPanel.item)
+        });
+      } else {
+        setHover(null);
+      }
+    };
+
+    const interactWithPanel = (panel: InteractivePanel): void => {
+      if (panel.item.type === 'link') {
+        const linkItem: BillboardLinkItem = panel.item;
+        window.open(linkItem.url, '_blank', 'noopener,noreferrer');
+        return;
+      }
+
+      setModalContent(toModalContent(panel.item));
+    };
+
+    const updateHoverByCenterRaycast = (force = false): void => {
+      const now = performance.now();
+      if (!force && now - lastRaycastTime < RAYCAST_INTERVAL_MS) {
+        return;
+      }
+      lastRaycastTime = now;
+
+      raycaster.setFromCamera(screenCenter, camera);
+      const intersections = raycaster.intersectObjects(
+        panels.map((panel) => panel.mesh),
+        false
+      );
+
+      const firstHit = intersections[0];
+      if (firstHit === undefined) {
+        applyHoverVisual(null);
+        return;
+      }
+
+      const nextPanel = panels.find((panel) => panel.mesh === firstHit.object) ?? null;
+      if (nextPanel !== hoveredPanel) {
+        applyHoverVisual(nextPanel);
+      }
+    };
 
     const onKeyDown = (event: KeyboardEvent): void => {
       if (isControlKey(event.code)) {
         inputState[event.code] = true;
+        return;
+      }
+
+      if (event.code === 'KeyE' && hoveredPanel !== null) {
+        interactWithPanel(hoveredPanel);
       }
     };
 
@@ -135,6 +316,7 @@ function GameApp(): JSX.Element {
         return;
       }
       isDragging = true;
+      dragDistance = 0;
       prevMouseX = event.clientX;
       prevMouseY = event.clientY;
       renderer.domElement.setPointerCapture(event.pointerId);
@@ -148,6 +330,7 @@ function GameApp(): JSX.Element {
       const deltaY = event.clientY - prevMouseY;
       prevMouseX = event.clientX;
       prevMouseY = event.clientY;
+      dragDistance += Math.hypot(deltaX, deltaY);
 
       cameraYaw -= deltaX * 0.005;
       cameraPitch = clamp(cameraPitch - deltaY * 0.003, CAMERA_PITCH_MIN, CAMERA_PITCH_MAX);
@@ -159,6 +342,10 @@ function GameApp(): JSX.Element {
       }
       isDragging = false;
       renderer.domElement.releasePointerCapture(event.pointerId);
+
+      if (event.button === 0 && dragDistance < 6 && hoveredPanel !== null) {
+        interactWithPanel(hoveredPanel);
+      }
     };
 
     const onResize = (): void => {
@@ -215,6 +402,8 @@ function GameApp(): JSX.Element {
       lookAtTarget.copy(airplane.position).add(new THREE.Vector3(0, 1.1, 0));
       camera.lookAt(lookAtTarget);
 
+      updateHoverByCenterRaycast();
+
       setHud({
         speed,
         altitude: airplane.position.y
@@ -223,6 +412,7 @@ function GameApp(): JSX.Element {
       renderer.render(scene, camera);
     };
 
+    updateHoverByCenterRaycast(true);
     animate();
 
     return () => {
@@ -234,6 +424,13 @@ function GameApp(): JSX.Element {
       renderer.domElement.removeEventListener('pointermove', onPointerMove);
       renderer.domElement.removeEventListener('pointerup', onPointerUp);
       renderer.domElement.removeEventListener('pointerleave', onPointerUp);
+
+      panels.forEach((panel) => {
+        panel.border.geometry.dispose();
+        panel.border.material.dispose();
+        panel.mesh.geometry.dispose();
+        panel.mesh.material.dispose();
+      });
 
       mountElement.removeChild(renderer.domElement);
       renderer.dispose();
@@ -252,8 +449,26 @@ function GameApp(): JSX.Element {
       <section className="hud" aria-label="Flight information">
         <p>Speed: {hud.speed.toFixed(1)} m/s</p>
         <p>Altitude: {hud.altitude.toFixed(1)} m</p>
-        <p className="hint">W/S - target speed | A/D - yaw | Mouse drag - camera orbit</p>
+        <p>Hover: {hover?.title ?? '—'}</p>
+        <p>Action: {hover?.actionHint ?? 'Aim at panel to interact'}</p>
+        <p className="hint">W/S - target speed | A/D - yaw | Mouse drag - camera orbit | E/LeftClick - interact</p>
       </section>
+
+      {modalContent !== null ? (
+        <div className="modal-backdrop" role="presentation" onClick={() => setModalContent(null)}>
+          <div className="modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+            <button type="button" className="modal-close" onClick={() => setModalContent(null)}>
+              Close
+            </button>
+            <h2>{modalContent.title}</h2>
+            {modalContent.type === 'image' ? (
+              <img src={modalContent.url} alt={modalContent.title} className="modal-image" />
+            ) : (
+              <pre className="modal-text">{modalContent.text}</pre>
+            )}
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

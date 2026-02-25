@@ -72,6 +72,7 @@ body,
   background: rgba(10, 17, 27, 0.68);
   border: 1px solid rgba(190, 220, 255, 0.2);
   backdrop-filter: blur(6px);
+  min-width: 320px;
 }
 
 .hud p {
@@ -83,4 +84,52 @@ body,
   margin-top: 0.55rem;
   opacity: 0.85;
   font-size: 0.78rem;
+}
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(4, 8, 14, 0.75);
+  z-index: 10;
+}
+
+.modal {
+  width: min(80vw, 780px);
+  max-height: 80vh;
+  overflow: auto;
+  padding: 1rem;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(185, 215, 255, 0.42);
+  background: #101824;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+}
+
+.modal h2 {
+  margin: 0.2rem 0 0.8rem;
+  font-size: 1.2rem;
+}
+
+.modal-close {
+  float: right;
+  border: 1px solid rgba(160, 198, 248, 0.4);
+  background: rgba(32, 54, 86, 0.8);
+  color: #e7f1ff;
+  border-radius: 0.4rem;
+  cursor: pointer;
+  padding: 0.35rem 0.7rem;
+}
+
+.modal-image {
+  width: 100%;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(155, 195, 245, 0.28);
+}
+
+.modal-text {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: inherit;
+  line-height: 1.45;
 }
