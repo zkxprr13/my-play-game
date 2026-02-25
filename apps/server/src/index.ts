@@ -23,7 +23,7 @@ const toErrorPayload = (error: Error & { statusCode?: number; code?: string }): 
 };
 
 app.setErrorHandler((error, _request, reply) => {
-  const statusCode = error.statusCode ?? reply.statusCode ?? 500;
+  const statusCode = error.statusCode ?? (reply.statusCode >= 400 ? reply.statusCode : 500);
   const payload = toErrorPayload({
     message: error.message,
     name: error.name,
